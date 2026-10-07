@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "ok-online judge",
+  "version": "0.1.0",
+  "description": "세종대학교 OJ 문제·코드 편집·실행·제출·결과를 한 화면에서 확인합니다.",
+  "permissions": ["activeTab"],
+  "action": { "default_title": "ok-online judge" },
+  "background": { "service_worker": "background.js" },
+  "content_security_policy": { "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self'; frame-src 'self' blob: https://oj.sejong.ac.kr https://ex-oj.sejong.ac.kr; connect-src 'self' https://oj.sejong.ac.kr https://ex-oj.sejong.ac.kr" },
+  "content_scripts": [{ "matches": ["https://oj.sejong.ac.kr/*", "https://ex-oj.sejong.ac.kr/*"], "js": ["bridge.js"], "run_at": "document_idle" }],
+  "web_accessible_resources": [{ "resources": ["app/*", "app/clang/*", "app/clang/bin/*", "app/pyodide/*", "app/pdf/cmaps/*", "app/pdf/standard_fonts/*", "app/pdf/wasm/*"], "matches": ["https://oj.sejong.ac.kr/*", "https://ex-oj.sejong.ac.kr/*"] }]
+}

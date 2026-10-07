@@ -1,0 +1,23 @@
+{
+  "name": "ok-online-judge",
+  "version": "0.1.0",
+  "private": true,
+  "overrides": { "dompurify": "$dompurify" },
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --test checks/*.test.mjs",
+    "preview": "node scripts/preview.mjs"
+  },
+  "dependencies": {
+    "@live-codes/clang-wasm": "0.3.0",
+    "dompurify": "3.4.16",
+    "monaco-editor": "0.57.0",
+    "pdfjs-dist": "5.4.624",
+    "pyodide": "0.29.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "linkedom": "0.18.12"
+  }
+}

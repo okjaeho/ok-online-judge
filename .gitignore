@@ -1,0 +1,12 @@
+node_modules/
+extension/app/bundle*
+extension/app/editor.worker.js
+extension/app/run.worker.js
+extension/app/clang/
+extension/app/pyodide/
+extension/app/pdf/
+extension/app/pdf.worker.mjs
+extension/app/licenses/
+extension/app/codicon-*.ttf
+artifacts/
+.env*
