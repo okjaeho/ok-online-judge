@@ -36,7 +36,7 @@ const editor = monaco.editor.create($('editor'), {
   value:'', language:'c', theme:prefs.theme, fontSize:prefs.font, fontFamily:'Consolas, "Cascadia Code", monospace',
   automaticLayout:true, editContext:false, minimap:{enabled:false}, scrollBeyondLastLine:false, padding:{top:18,bottom:18}, tabSize:4,
   insertSpaces:true, autoClosingBrackets:'always', autoClosingQuotes:'always', autoIndent:'full',
-  bracketPairColorization:{enabled:true}, guides:{bracketPairs:false,bracketPairsHorizontal:false,indentation:false,highlightActiveIndentation:false}, matchBrackets:'never', suggest:{showWords:true},
+  bracketPairColorization:{enabled:true}, guides:{bracketPairs:false,bracketPairsHorizontal:false,indentation:true,highlightActiveIndentation:true}, matchBrackets:'never', suggest:{showWords:true},
   wordBasedSuggestions:'currentDocument', renderLineHighlight:'none', stickyScroll:{enabled:false}, accessibilitySupport:'auto'
 });
 monaco.languages.registerCompletionItemProvider('c', {
