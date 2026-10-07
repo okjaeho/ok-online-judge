@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ok-online judge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "세종대학교 OJ 문제·코드 편집·실행·제출·결과를 한 화면에서 확인합니다.",
   "permissions": ["activeTab"],
   "action": { "default_title": "ok-online judge" },

@@ -12,6 +12,7 @@ import DOMPurify from 'dompurify';
 import * as OJ from './oj.js';
 import { readLocal, writeLocal, book } from './store.js';
 import { loadPdf, drawPdf } from './pdf.js';
+import { createNavigator } from './navigator.js';
 
 const $ = id => document.getElementById(id);
 const preview = ['127.0.0.1', 'localhost'].includes(location.hostname);
@@ -20,13 +21,23 @@ const state = { origin:'', courses:[], contests:[], problems:[], course:null, co
 const models = new Map(), requests = new Map();
 let requestCount = 0, editorKey, changingEditor = false, savingError = false, submitting = false, pollController;
 let runWorker, runTimer, runId = 0, running = false;
+const navigator=createNavigator({host:$('courseTree'),
+  loadContests:async course=>OJ.contests(await read(course.path),state.origin),
+  loadProblems:async contest=>OJ.problems(await read(contest.path),state.origin),
+  onSelect:async(course,contest,problem)=>{
+    if(course.id!==state.course?.id)await selectCourse(course.id,{contest:contest.id,problem:problem.id});
+    else if(contest.id!==state.contest?.id)await selectContest(contest.id,problem.id);
+    else if(problem.id!==state.problem?.id)await selectProblem(problem.id);
+    if(innerWidth<800)setSidebar(false);
+  },onError:error=>notice(error.message,true),onOpened:expanded=>{try{writeLocal('folders:'+state.origin,expanded);}catch{}}
+});
 globalThis.MonacoEnvironment = { getWorker:() => new Worker(new URL('editor.worker.js', location.href), { type:'module' }) };
 const editor = monaco.editor.create($('editor'), {
   value:'', language:'c', theme:prefs.theme, fontSize:prefs.font, fontFamily:'Consolas, "Cascadia Code", monospace',
   automaticLayout:true, editContext:false, minimap:{enabled:false}, scrollBeyondLastLine:false, padding:{top:18,bottom:18}, tabSize:4,
   insertSpaces:true, autoClosingBrackets:'always', autoClosingQuotes:'always', autoIndent:'full',
-  bracketPairColorization:{enabled:true}, guides:{bracketPairs:true}, suggest:{showWords:true},
-  wordBasedSuggestions:'currentDocument', renderLineHighlight:'line', stickyScroll:{enabled:false}, accessibilitySupport:'auto'
+  bracketPairColorization:{enabled:true}, guides:{bracketPairs:false,bracketPairsHorizontal:false,indentation:false,highlightActiveIndentation:false}, matchBrackets:'never', suggest:{showWords:true},
+  wordBasedSuggestions:'currentDocument', renderLineHighlight:'none', stickyScroll:{enabled:false}, accessibilitySupport:'auto'
 });
 monaco.languages.registerCompletionItemProvider('c', {
   provideCompletionItems(model, position) {
@@ -108,6 +119,7 @@ async function loadHome(initialPath) {
   notice('강좌 불러오는 중…');
   const doc=await read('/index.php/judge');state.courses=OJ.courses(doc,state.origin);
   if(!state.courses.length)throw Error('등록된 강좌를 찾지 못했습니다. 원래 OJ의 My Class를 확인해주세요.');
+  navigator.reset(state.courses,readLocal('folders:'+state.origin,[]));
   const saved=readLocal('navigation:'+state.origin,{}),initial=OJ.route(initialPath);
   const chosen=state.courses.find(c=>c.id===(initial.course||saved.course))||state.courses.find(c=>c.id!=='1')||state.courses[0];
   options($('course'),state.courses,chosen.id);await selectCourse(chosen.id,{contest:initial.contest||saved.contest,problem:initial.problem||saved.problem});
@@ -115,16 +127,16 @@ async function loadHome(initialPath) {
 async function selectCourse(id, desired={}) {
   saveDraft();haltPoll();const epoch=++state.epoch;state.course=state.courses.find(c=>c.id===id);state.problem=null;state.form=null;updateButtons();
   options($('contest'),[],null);$('problems').replaceChildren();notice('탭 불러오는 중…');
-  const doc=await read(state.course.path);if(epoch!==state.epoch)return;
-  state.contests=OJ.contests(doc,state.origin);await restoreBook();if(epoch!==state.epoch)return;
+  state.contests=await navigator.getContests(state.course);if(epoch!==state.epoch)return;
+  await restoreBook();if(epoch!==state.epoch)return;
   if(!state.contests.length){notice('이 강좌의 문제 탭이 없습니다.');return;}
   const chosen=state.contests.find(c=>c.id===desired.contest)||state.contests[0];options($('contest'),state.contests,chosen.id);
   await selectContest(chosen.id,desired.problem);
 }
 async function selectContest(id, desired) {
   saveDraft();haltPoll();const epoch=++state.epoch;state.contest=state.contests.find(c=>c.id===id);state.problem=null;state.form=null;updateButtons();
-  notice('문제 목록 불러오는 중…');const doc=await read(state.contest.path);if(epoch!==state.epoch)return;
-  state.problems=OJ.problems(doc,state.origin);renderProblemTabs();
+  notice('문제 목록 불러오는 중…');const problems=await navigator.getProblems(state.course,state.contest);if(epoch!==state.epoch)return;
+  state.problems=problems;renderProblemTabs();
   if(!state.problems.length){$('statement').replaceChildren(empty('아직 공개된 문제가 없습니다.'));notice('문제 목록을 확인하려면 원래 OJ 화면을 확인해주세요.');$('original').href=state.origin+state.contest.path;return;}
   const chosen=state.problems.find(p=>p.id===desired)||state.problems[0];await selectProblem(chosen.id);
 }
@@ -134,6 +146,8 @@ function renderProblemTabs() {
     button.classList.toggle('selected',problem.id===state.problem?.id);button.classList.toggle('passed',/^100\s*\//.test(problem.score));const dot=document.createElement('span');dot.className='score-dot';button.append(dot);button.onclick=()=>guard(()=>selectProblem(problem.id));return button;
   }));
   const index=state.problems.findIndex(p=>p.id===state.problem?.id);$('previous').disabled=index<=0;$('next').disabled=index<0||index>=state.problems.length-1;
+  $('breadcrumb').textContent=[state.course?.title,state.contest?.title,state.problem?.title].filter(Boolean).join('  /  ');
+  if(state.problem)navigator.reveal(state.course,state.contest,state.problem).catch(error=>notice(error.message,true));
 }
 async function selectProblem(id) {
   saveDraft();haltPoll();const epoch=++state.epoch;state.problem=state.problems.find(p=>p.id===id);state.form=null;state.history=[];updateButtons();renderProblemTabs();saveNavigation();
@@ -294,7 +308,13 @@ $('runTab').onclick=()=>setConsole('run');$('resultTab').onclick=()=>setConsole(
 $('clearOutput').onclick=()=>{$('stdout').textContent='';$('runInfo').textContent='';};
 $('refresh').onclick=()=>guard(async()=>{if(submitting)return;const selected=readLocal('navigation:'+state.origin,{});await loadHome('/index.php/judge');});
 $('close').onclick=()=>{saveDraft();haltPoll();stopRun(null);if(!preview)parent.postMessage({channel:'ok-oj',type:'close'},state.origin);};
+function setSidebar(open) {
+  prefs.sidebarOpen=open;$('appBody').classList.toggle('sidebar-closed',!open);$('sidebarToggle').setAttribute('aria-expanded',String(open));$('sidebarToggle').title=open?'강좌 목록 접기':'강좌 목록 펼치기';$('sidebar').hidden=!open;$('sidebarBackdrop').hidden=!open;remember();editor.layout();
+}
+$('sidebarToggle').onclick=()=>setSidebar(!prefs.sidebarOpen);$('sidebarClose').onclick=$('sidebarBackdrop').onclick=()=>setSidebar(false);
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&innerWidth<800&&prefs.sidebarOpen)setSidebar(false);});
 window.addEventListener('pagehide',()=>{saveDraft();runWorker?.terminate();if(state.pdfUrl)URL.revokeObjectURL(state.pdfUrl);});
 async function guard(action) { try { await action(); } catch(error) { if(error.message!=='cancelled')notice(error.message,true); } }
 ratio(prefs.ratio);consoleHeight(prefs.consoleHeight);document.body.classList.toggle('light-editor',prefs.theme==='vs');if(prefs.folded){$('workspace').classList.add('folded');$('unfold').hidden=false;}updateButtons();
+setSidebar(prefs.sidebarOpen??innerWidth>=800);
 guard(async()=>{const path=await connect();$('hostLabel').textContent=preview?'미리보기':state.origin.includes('ex-')?'EX-OJ':'OJ';await loadHome(path);});
