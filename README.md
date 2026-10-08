@@ -1,3 +1,5 @@
+![ok-online judge 데모](docs/demo.jpg)
+
 # ok-online judge
 
 기존 세종대학교 Online Judge에서는 코드를 제출한 뒤 수정하고 다시 제출하려면 여러 탭과 화면을 오가야 합니다. 이 불편을 줄이기 위해 문제 확인, 코드 편집, 실행, 제출과 결과 확인을 한 화면에서 할 수 있는 Chrome 확장 프로그램을 개발했습니다.
