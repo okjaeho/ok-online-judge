@@ -4,5 +4,5 @@ $taskManifest = Get-Content -LiteralPath (Join-Path $taskRoot 'extension/manifes
 $taskArtifacts = Join-Path $taskRoot 'artifacts'
 New-Item -ItemType Directory -Force -Path $taskArtifacts | Out-Null
 $taskZip = Join-Path $taskArtifacts ("ok-online-judge-v" + $taskManifest.version + '.zip')
-Compress-Archive -LiteralPath (Join-Path $taskRoot 'extension'), (Join-Path $taskRoot 'README.md') -DestinationPath $taskZip -Force
+Compress-Archive -LiteralPath (Join-Path $taskRoot 'extension'), (Join-Path $taskRoot 'README.md'), (Join-Path $taskRoot 'docs') -DestinationPath $taskZip -Force
 Get-Item -LiteralPath $taskZip | Select-Object FullName, Length

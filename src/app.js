@@ -13,12 +13,13 @@ import * as OJ from './oj.js';
 import { readLocal, writeLocal, book } from './store.js';
 import { loadPdf, drawPdf } from './pdf.js';
 import { createNavigator } from './navigator.js';
+import { latestSource, submissionTime, fullScore } from './sources.js';
 
 const $ = id => document.getElementById(id);
 const preview = ['127.0.0.1', 'localhost'].includes(location.hostname);
 const prefs = readLocal('preferences', { ratio:43, font:14, theme:'vs-dark', consoleHeight:230 });
 const state = { origin:'', courses:[], contests:[], problems:[], course:null, contest:null, problem:null, form:null, history:[], epoch:0, pdf:null, pdfUrl:null, bookMode:false };
-const models = new Map(), requests = new Map();
+const models = new Map(), modelUpdated = new Map(), requests = new Map();
 let requestCount = 0, editorKey, changingEditor = false, savingError = false, submitting = false, pollController;
 let runWorker, runTimer, runId = 0, running = false;
 const navigator=createNavigator({host:$('courseTree'),
@@ -60,14 +61,15 @@ function draftKey(problem=state.problem, language=$('language').value) { return 
 function draft() { return editorKey ? readLocal('draft:' + editorKey, {}) : {}; }
 function saveDraft() {
   if (changingEditor || !editorKey) return;
-  try { writeLocal('draft:' + editorKey, { code:editor.getValue(),stdin:$('stdin').value, view:editor.saveViewState(),updated:Date.now() }); $('saved').textContent='저장됨'; savingError=false; }
+  try { writeLocal('draft:' + editorKey, { code:editor.getValue(),stdin:$('stdin').value, view:editor.saveViewState(),updated:modelUpdated.get(editorKey)||0 }); $('saved').textContent='저장됨'; savingError=false; }
   catch { if(!savingError) notice('코드 자동 저장에 실패했습니다. 코드를 복사해 보관해주세요.',true); savingError=true; $('saved').textContent='저장 실패'; }
 }
-editor.onDidChangeModelContent(saveDraft); $('stdin').oninput=saveDraft;
+editor.onDidChangeModelContent(()=>{if(changingEditor||!editorKey)return;modelUpdated.set(editorKey,Date.now());saveDraft();}); $('stdin').oninput=saveDraft;
 function languageInfo() { return state.form?.languages.find(l=>l.id===$('language').value); }
 function setEditor(language, initial) {
   saveDraft(); changingEditor=true;
   editorKey=draftKey(state.problem,language.id);
+  if(!modelUpdated.has(editorKey))modelUpdated.set(editorKey,readLocal('draft:'+editorKey,{})?.updated||0);
   if(!models.has(editorKey)) models.set(editorKey,monaco.editor.createModel(readLocal('draft:'+editorKey)?.code ?? initial ?? OJ.starter(language.editor),language.editor,monaco.Uri.parse('inmemory://ok-oj/'+encodeURIComponent(editorKey)+'.'+(language.editor==='cpp'?'cpp':language.editor==='python'?'py':language.editor==='java'?'java':'c'))));
   editor.setModel(models.get(editorKey));
   const saved=readLocal('draft:'+editorKey,{}); $('stdin').value=saved.stdin || ''; if(saved.view)editor.restoreViewState(saved.view);
@@ -79,7 +81,8 @@ function updateButtons() {
   const unavailable=!state.problem||!state.form||state.form.disabled||submitting;
   $('submit').disabled=unavailable; $('sample').disabled=unavailable||!state.form?.hasSample;
   $('run').disabled=!state.problem||(!running&&!['c','cpp','python'].includes(languageInfo()?.editor));
-  $('restore').disabled=!state.history.some(h=>h.sourcePath||h.editPath)||submitting;
+  $('restore').disabled=!state.problem||!state.form||(!state.history.some(h=>h.sourcePath||h.editPath)&&!readLocal('draft:'+editorKey))||submitting;
+  $('language').disabled=!state.form;
 }
 function options(select, list, selected) { select.replaceChildren(...list.map(item=>new Option(item.title,item.id,item.id===selected,item.id===selected))); }
 function saveNavigation() { try { writeLocal('navigation:'+state.origin,{course:state.course?.id,contest:state.contest?.id,problem:state.problem?.id}); } catch {} }
@@ -143,7 +146,7 @@ async function selectContest(id, desired) {
 function renderProblemTabs() {
   $('problems').replaceChildren(...state.problems.map(problem=>{
     const button=document.createElement('button');button.title=problem.title;button.textContent=problem.number||problem.title;button.setAttribute('role','tab');button.setAttribute('aria-label',problem.title+(problem.score?' · '+problem.score:''));button.setAttribute('aria-selected',String(problem.id===state.problem?.id));
-    button.classList.toggle('selected',problem.id===state.problem?.id);button.classList.toggle('passed',/^100\s*\//.test(problem.score));const dot=document.createElement('span');dot.className='score-dot';button.append(dot);button.onclick=()=>guard(()=>selectProblem(problem.id));return button;
+    button.classList.toggle('selected',problem.id===state.problem?.id);button.classList.toggle('passed',fullScore(problem.score));const dot=document.createElement('span');dot.className='score-dot';button.append(dot);button.onclick=()=>guard(()=>selectProblem(problem.id));return button;
   }));
   const index=state.problems.findIndex(p=>p.id===state.problem?.id);$('previous').disabled=index<=0;$('next').disabled=index<0||index>=state.problems.length-1;
   $('breadcrumb').textContent=[state.course?.title,state.contest?.title,state.problem?.title].filter(Boolean).join('  /  ');
@@ -162,7 +165,7 @@ async function selectProblem(id) {
   const lastLang=readLocal('language:'+state.origin),language=state.form.languages.find(l=>l.id===lastLang)||state.form.languages.find(l=>l.selected)||state.form.languages[0];
   $('language').replaceChildren(...state.form.languages.map(l=>new Option(l.label,l.id,l.id===language.id,l.id===language.id)));
   setEditor(language,state.form.source.trim()?state.form.source:undefined);notice('');
-  if(state.problem.statusPath) { await refreshHistory(state.problem,epoch); if(epoch!==state.epoch)return; if(!readLocal('draft:'+editorKey)&&state.history[0]?.sourcePath) await restoreCode(state.history[0],false); }
+  if(state.problem.statusPath)await restoreLatest(false);
   updateButtons();
 }
 function empty(text) { const div=document.createElement('div');div.className='empty';div.textContent=text;return div; }
@@ -183,11 +186,36 @@ async function refreshHistory(problem=state.problem, epoch=state.epoch) {
   if(epoch===state.epoch&&problem.id===state.problem?.id){state.history=history;renderHistory();updateButtons();}
   return history;
 }
-async function restoreCode(result=state.history[0], focus=true) {
-  if(!result)return;const epoch=state.epoch,doc=await read(result.sourcePath||result.editPath);if(epoch!==state.epoch)return;
+function editorSnapshot() {return {epoch:state.epoch,key:editorKey,model:editor.getModel(),version:editor.getModel()?.getVersionId()};}
+function editorUnchanged(snapshot) {return snapshot.epoch===state.epoch&&snapshot.key===editorKey&&snapshot.model===editor.getModel()&&snapshot.version===editor.getModel()?.getVersionId();}
+function applyCode(code,updated,focus) {
+  changingEditor=true;
+  try{if(editor.getValue()!==code)editor.setValue(code);modelUpdated.set(editorKey,updated||0);}finally{changingEditor=false;}
+  saveDraft();if(focus)editor.focus();notice('');
+}
+async function restoreLatest(focus=true) {
+  if(!state.problem||!state.form||!editorKey)return;
+  const snapshot=editorSnapshot(),language=languageInfo()?.editor;
+  const local={...draft(),code:editor.getValue(),updated:modelUpdated.get(editorKey)||0};
+  const history=await refreshHistory();if(!editorUnchanged(snapshot))return;
+  const chosen=latestSource(local,history,language);if(!chosen)return;
+  if(chosen.kind==='local'){applyCode(chosen.draft.code,chosen.draft.updated,focus);return;}
+  await restoreCode(chosen.result,focus,snapshot);
+}
+async function restoreCode(result=state.history[0], focus=true, snapshot=editorSnapshot()) {
+  if(!result)return;const doc=await read(result.sourcePath||result.editPath);if(!editorUnchanged(snapshot))return;
   const code=doc.querySelector('#editor')?.textContent||doc.querySelector('pre')?.textContent;
   if(code==null||!code.trim())throw Error('제출 코드를 불러오지 못했습니다.');
-  editor.setValue(code);saveDraft();if(focus)editor.focus();notice('');
+  if(result.language&&result.language!==languageInfo()?.editor){const language=state.form.languages.find(l=>l.editor===result.language);if(!language)throw Error('이 제출의 언어를 현재 문제에서 사용할 수 없습니다.');$('language').value=language.id;setEditor(language);}
+  applyCode(code,submissionTime(result.date),focus);
+}
+async function refreshProblemScores(course=state.course,contest=state.contest) {
+  if(!course||!contest)return;
+  const problems=await navigator.refreshProblems(course,contest);
+  if(course.id===state.course?.id&&contest.id===state.contest?.id){
+    for(const problem of state.problems){const fresh=problems.find(p=>p.id===problem.id);if(fresh)Object.assign(problem,fresh);}
+    renderProblemTabs();
+  }
 }
 function setConsole(tab) {
   $('console').classList.remove('collapsed');
@@ -208,7 +236,7 @@ async function resultDetails(result) {
 async function submit(sample) {
   if(submitting||!state.form||!state.problem||state.form.disabled)return;
   if(sample&&!state.form.hasSample)return;saveDraft();if(!editor.getValue().trim()){notice('제출할 코드를 입력해주세요.',true);return;}
-  const problem=state.problem,epoch=state.epoch,form=state.form,source=editor.getValue(),lang=$('language').value;submitting=true;haltPoll();updateButtons();setConsole('result');$('resultPane').replaceChildren(empty(sample?'Sample Submit 중…':'제출 중…'));notice('');
+  const problem=state.problem,course=state.course,contest=state.contest,epoch=state.epoch,form=state.form,source=editor.getValue(),lang=$('language').value;submitting=true;haltPoll();updateButtons();setConsole('result');$('resultPane').replaceChildren(empty(sample?'Sample Submit 중…':'제출 중…'));notice('');
   try {
     const before=await refreshHistory(problem,epoch),beforeIds=new Set(before.map(r=>r.id));
     const fields=[...form.hidden,['lang',lang],['real_source_code',source]];
@@ -220,7 +248,8 @@ async function submit(sample) {
     for(let attempt=0;attempt<40;attempt++) {
       if(signal.aborted||epoch!==state.epoch)return;
       const history=await refreshHistory(problem,epoch);submitted=(submitted?history.find(r=>r.id===submitted.id):history.find(r=>!beforeIds.has(r.id)))||submitted;
-      if(submitted){showResult(submitted,sample?'Sample':'Submit');if(!submitted.pending){if(submitted.samplePath||submitted.errorPath)await resultDetails(submitted);return;}}
+      if(signal.aborted||epoch!==state.epoch)return;
+      if(submitted){showResult(submitted,sample?'Sample':'Submit');if(!submitted.pending){try{await refreshProblemScores(course,contest);}catch{notice('문제 점수를 갱신하지 못했습니다. 목록 새로고침을 눌러주세요.',true);}if(signal.aborted||epoch!==state.epoch)return;if(submitted.samplePath||submitted.errorPath)await resultDetails(submitted);return;}}
       await new Promise(resolve=>{const timer=setTimeout(resolve,Math.min(5000,1200+attempt*200));signal.addEventListener('abort',()=>{clearTimeout(timer);resolve();},{once:true});});
     }
     notice('채점이 아직 끝나지 않았습니다. 제출 기록을 새로고침해 확인해주세요.');
@@ -255,30 +284,38 @@ function showBook(value) {
 async function renderBook() {
   if(state.pdfUrl)URL.revokeObjectURL(state.pdfUrl);state.pdfUrl=null;
   $('bookName').textContent=state.pdf?.name||'교재 PDF';$('bookPage').value=state.pdf?.page||1;$('removeBook').disabled=!state.pdf;
-  if(!state.pdf){const button=text('button','PDF 불러오기','empty-book');button.onclick=()=>$('pdfFile').click();$('pdfHost').replaceChildren(button);return;}
+  if(!state.pdf){await loadPdf(null);if(state.pdf)return;state.pdfCount=0;$('bookTotal').textContent='';const button=text('button','PDF 불러오기','empty-book');button.onclick=()=>$('pdfFile').click();$('pdfHost').replaceChildren(button);return;}
   const pdf=state.pdf,count=await loadPdf(pdf.blob);if(state.pdf!==pdf)return;
   state.pdfCount=count;$('bookTotal').textContent='/ '+count;$('bookPage').max=count;
   state.pdf.page=Math.min(state.pdf.page||1,count);$('bookPage').value=state.pdf.page;
-  await drawPdf($('pdfHost'),state.pdf.page,$('bookZoom').value);
+  await drawBook(state.pdf.page);
+}
+async function drawBook(number=state.pdf?.page||1,preservePosition=false) {
+  const pdf=state.pdf,key=namespace();if(!pdf)return;
+  await drawPdf($('pdfHost'),number,$('bookZoom').value,page=>{
+    if(state.pdf!==pdf||key!==namespace())return;
+    pdf.page=page;$('bookPage').value=page;
+    try{writeLocal('bookPage:'+key,page);}catch{}
+  },{preservePosition});
 }
 async function restoreBook() {
-  const key=namespace(),pdf=await book(key)||null;if(key!==namespace())return;state.pdf=pdf;showBook(readLocal('bookMode:'+key,false));await renderBook();
+  const key=namespace(),pdf=await book(key)||null;if(key!==namespace())return;if(pdf)pdf.page=readLocal('bookPage:'+key,pdf.page||1);state.pdf=pdf;showBook(readLocal('bookMode:'+key,false));await renderBook();
 }
 $('pdfFile').onchange=()=>guard(async()=>{
   const file=$('pdfFile').files[0];if(!file)return;
   try {
     if(file.size>200*1024*1024)throw Error('교재는 200MB 이하의 PDF를 선택해주세요.');
     if(new TextDecoder().decode(await file.slice(0,5).arrayBuffer())!=='%PDF-')throw Error('PDF 파일을 선택해주세요.');
-    const key=namespace(),pdf={name:file.name,blob:file,page:1};await book(key,pdf);if(key!==namespace())return;state.pdf=pdf;showBook(true);await renderBook();writeLocal('bookMode:'+key,true);notice('');
+    const key=namespace(),pdf={name:file.name,blob:file,page:1};await book(key,pdf);writeLocal('bookPage:'+key,1);if(key!==namespace())return;state.pdf=pdf;showBook(true);await renderBook();writeLocal('bookMode:'+key,true);notice('');
   } finally { $('pdfFile').value=''; }
 });
 $('uploadBook').onclick=$('pickBook').onclick=()=>$('pdfFile').click();
 $('removeBook').onclick=()=>guard(async()=>{const key=namespace();await book(key,null);if(key!==namespace())return;state.pdf=null;await loadPdf(null);await renderBook();});
-async function changeBookPage(number) {if(!state.pdf)return;const key=namespace(),pdf=state.pdf;pdf.page=Math.max(1,Math.min(state.pdfCount||1,Math.floor(number)||1));$('bookPage').value=pdf.page;await book(key,pdf);if(key!==namespace())return;await drawPdf($('pdfHost'),pdf.page,$('bookZoom').value);}
+async function changeBookPage(number) {if(!state.pdf)return;const pdf=state.pdf;pdf.page=Math.max(1,Math.min(state.pdfCount||1,Math.floor(number)||1));$('bookPage').value=pdf.page;writeLocal('bookPage:'+namespace(),pdf.page);await drawBook(pdf.page);}
 $('bookPage').onchange=()=>guard(()=>changeBookPage(Number($('bookPage').value)));
 $('bookPrevious').onclick=()=>guard(()=>changeBookPage((state.pdf?.page||1)-1));$('bookNext').onclick=()=>guard(()=>changeBookPage((state.pdf?.page||1)+1));
-$('bookZoom').onchange=()=>guard(()=>drawPdf($('pdfHost'),state.pdf?.page||1,$('bookZoom').value));
-let bookResizeTimer;new ResizeObserver(()=>{clearTimeout(bookResizeTimer);bookResizeTimer=setTimeout(()=>{if(state.bookMode&&state.pdf&&$('bookZoom').value==='fit')guard(()=>drawPdf($('pdfHost'),state.pdf.page,'fit'));},120);}).observe($('pdfHost'));
+$('bookZoom').onchange=()=>guard(()=>drawBook(state.pdf?.page||1,true));
+let bookResizeTimer;new ResizeObserver(()=>{clearTimeout(bookResizeTimer);bookResizeTimer=setTimeout(()=>{if(state.bookMode&&state.pdf)guard(()=>drawBook(state.pdf.page,true));},120);}).observe($('pdfHost'));
 $('bookTab').onclick=()=>{showBook(true);try{writeLocal('bookMode:'+namespace(),true);}catch{}};
 $('statementTab').onclick=()=>{showBook(false);try{writeLocal('bookMode:'+namespace(),false);}catch{}};
 $('fold').onclick=()=>{$('workspace').classList.add('folded');$('unfold').hidden=false;prefs.folded=true;remember();editor.layout();};
@@ -299,12 +336,12 @@ $('outputSplitter').onkeydown=event=>{if(['ArrowUp','ArrowDown'].includes(event.
 $('toggleConsole').onclick=()=>{$('console').classList.toggle('collapsed');editor.layout();};
 $('theme').onclick=()=>{prefs.theme=prefs.theme==='vs-dark'?'vs':'vs-dark';monaco.editor.setTheme(prefs.theme);document.body.classList.toggle('light-editor',prefs.theme==='vs');remember();};
 $('fontSize').value=prefs.font;$('fontSize').onchange=()=>{prefs.font=Number($('fontSize').value);editor.updateOptions({fontSize:prefs.font});remember();};
-$('language').onchange=()=>{const language=languageInfo();setEditor(language);try{writeLocal('language:'+state.origin,language.id);}catch{}};
+$('language').onchange=()=>{const language=languageInfo();setEditor(language);try{writeLocal('language:'+state.origin,language.id);}catch{}guard(()=>restoreLatest(false));};
 $('course').onchange=()=>guard(()=>selectCourse($('course').value));$('contest').onchange=()=>guard(()=>selectContest($('contest').value));
 $('previous').onclick=()=>guard(()=>selectProblem(state.problems[state.problems.findIndex(p=>p.id===state.problem.id)-1].id));
 $('next').onclick=()=>guard(()=>selectProblem(state.problems[state.problems.findIndex(p=>p.id===state.problem.id)+1].id));
-$('restore').onclick=()=>guard(()=>restoreCode());$('run').onclick=runCode;$('sample').onclick=()=>submit(true);$('submit').onclick=()=>submit(false);
-$('runTab').onclick=()=>setConsole('run');$('resultTab').onclick=()=>setConsole('result');$('historyTab').onclick=()=>guard(async()=>{setConsole('history');await refreshHistory();});
+$('restore').onclick=()=>guard(()=>restoreLatest());$('run').onclick=runCode;$('sample').onclick=()=>submit(true);$('submit').onclick=()=>submit(false);
+$('runTab').onclick=()=>setConsole('run');$('resultTab').onclick=()=>setConsole('result');$('historyTab').onclick=()=>guard(async()=>{setConsole('history');await refreshHistory();await refreshProblemScores();});
 $('clearOutput').onclick=()=>{$('stdout').textContent='';$('runInfo').textContent='';};
 $('refresh').onclick=()=>guard(async()=>{if(submitting)return;const selected=readLocal('navigation:'+state.origin,{});await loadHome('/index.php/judge');});
 $('close').onclick=()=>{saveDraft();haltPoll();stopRun(null);if(!preview)parent.postMessage({channel:'ok-oj',type:'close'},state.origin);};

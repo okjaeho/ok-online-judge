@@ -1,3 +1,4 @@
+import { sourceLanguage } from './sources.js';
 export const compact = value => String(value || '').replace(/\s+/g, ' ').trim();
 export function parse(html) { return new DOMParser().parseFromString(html, 'text/html'); }
 export function safePath(href, origin) {
@@ -60,7 +61,8 @@ export function results(doc, origin) {
   return [...doc.querySelectorAll('#result-tab tr')].slice(1).flatMap(row => {
     const c = [...row.querySelectorAll(':scope > td, :scope > th')]; if (c.length < 9 || !/^\d+$/.test(compact(c[0].textContent))) return [];
     const link = pattern => { const a = [...row.querySelectorAll('a[href]')].find(a => pattern.test(a.getAttribute('href'))); return a ? safePath(a.getAttribute('href'), origin) : null; };
-    return [{ id: compact(c[0].textContent), result: compact(c[3].textContent), score: compact(c[4].textContent), time: compact(c[6].textContent), memory: compact(c[7].textContent), date: compact(c[8].textContent), editPath: link(/\/submitpage\//), sourcePath: link(/\/showsource\//), samplePath: link(/\/sample_status\//), errorPath: link(/\/error\//), pending: /judging|pending/i.test(c[3].textContent) }];
+    const language=sourceLanguage(c[5].querySelector('a')?.textContent||c[5].textContent);
+    return [{ id: compact(c[0].textContent), result: compact(c[3].textContent), score: compact(c[4].textContent), language, time: compact(c[6].textContent), memory: compact(c[7].textContent), date: compact(c[8].textContent), editPath: link(/\/submitpage\//), sourcePath: link(/\/showsource\//), samplePath: link(/\/sample_status\//), errorPath: link(/\/error\//), pending: /judging|pending/i.test(c[3].textContent) }];
   });
 }
 export function starter(language) {
